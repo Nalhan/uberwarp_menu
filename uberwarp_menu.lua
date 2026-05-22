@@ -22,6 +22,7 @@ local default_settings = T{
     auto_close = false,
     alpha      = 0.95,
     scale      = 1.0,
+    collected  = {},
 };
 
 -- Supported Uberwarp Systems Configuration
@@ -112,6 +113,11 @@ local state = {
     settings           = settings.load(default_settings),
 };
 
+-- Ensure collected settings table is initialized
+if not state.settings.collected then
+    state.settings.collected = {};
+end
+
 -- Initialize locations and proximity structures
 for _, key in ipairs(system_order) do
     state.locations[key] = {};
@@ -151,10 +157,18 @@ local function load_system_locations(key)
                 -- Trim trailing null bytes and whitespace
                 zone_name = zone_name:trimend('\x00'):trim();
             end
+            
+            local px_str = line:match('posx="([^"]+)"');
+            local py_str = line:match('posy="([^"]+)"');
+            local pz_str = line:match('posz="([^"]+)"');
+            
             table.insert(state.locations[key], {
                 alias = alias,
                 zone_id = zone_id,
-                zone_name = zone_name
+                zone_name = zone_name,
+                x = px_str and tonumber(px_str) or 0.0,
+                y = py_str and tonumber(py_str) or 0.0,
+                z = pz_str and tonumber(pz_str) or 0.0,
             });
             count = count + 1;
         end
@@ -255,6 +269,68 @@ local function update_proximity()
             state.is_open[1] = false;
         end
     end
+
+    -- Check for nearby uncollected nodes
+    local current_zone = AshitaCore:GetMemoryManager():GetParty():GetMemberZone(0);
+    local party = AshitaCore:GetMemoryManager():GetParty();
+    local entMgr = AshitaCore:GetMemoryManager():GetEntity();
+    local myIndex = party:GetMemberTargetIndex(0);
+    
+    local closest_uncollected_dist = 999.0;
+    local closest_uncollected_node = nil;
+    
+    if myIndex and myIndex >= 0 then
+        local px = entMgr:GetLocalPositionX(myIndex);
+        local py = entMgr:GetLocalPositionY(myIndex);
+        local pz = entMgr:GetLocalPositionZ(myIndex);
+        
+        for _, key in ipairs(system_order) do
+            local sys = systems[key];
+            if #state.locations[key] > 0 then
+                for _, loc in ipairs(state.locations[key]) do
+                    if loc.zone_id == current_zone then
+                        local dx = px - loc.x;
+                        local dy = py - loc.y;
+                        local dz = pz - loc.z;
+                        local dist = math.sqrt(dx*dx + dy*dy + dz*dz);
+                        
+                        if dist < 12.0 then
+                            local is_collected = false;
+                            if state.settings.collected[key] and state.settings.collected[key][loc.alias] then
+                                is_collected = true;
+                            end
+                            
+                            if not is_collected then
+                                if dist < closest_uncollected_dist then
+                                    closest_uncollected_dist = dist;
+                                    closest_uncollected_node = {
+                                        key = key,
+                                        alias = loc.alias,
+                                        dist = dist,
+                                        system_name = sys.name
+                                    };
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    if closest_uncollected_node then
+        state.uncollected_near = closest_uncollected_node;
+        
+        -- Chat alert once per encounter
+        local alert_key = closest_uncollected_node.key .. '_' .. closest_uncollected_node.alias;
+        if state.last_chat_alert ~= alert_key then
+            print(chat.header(addon.name) .. chat.warning(string.format("Ran past uncollected %s: %s!", closest_uncollected_node.system_name, closest_uncollected_node.alias)));
+            state.last_chat_alert = alert_key;
+        end
+    else
+        state.uncollected_near = nil;
+        state.last_chat_alert = nil;
+    end
 end
 
 --[[
@@ -344,7 +420,10 @@ local search_aliases = {
 --[[
 * Renders a list of locations grouped by zone and applies proximity locking
 --]]
-local function render_locations_list(locations_table, is_near_npc, command_prefix)
+--[[
+* Renders a list of locations grouped by zone and applies proximity locking
+--]]
+local function render_locations_list(system_key, locations_table, is_near_npc, command_prefix)
     local scale = state.settings.scale or 1.0;
     local query = state.search_text[1]:gsub('%z', ''):trim():lower();
     local grouped = {};
@@ -407,8 +486,22 @@ local function render_locations_list(locations_table, is_near_npc, command_prefi
                             imgui.PushStyleColor(ImGuiCol_Text, { 0.5, 0.5, 0.5, 0.8 });
                         end
 
-                        if imgui.Button(loc.alias .. '##Btn_' .. command_prefix .. loc.alias, { -1, 26 * scale }) then
+                        -- Prepend checkmark depending on collected status
+                        local is_collected = false;
+                        if state.settings.collected[system_key] and state.settings.collected[system_key][loc.alias] then
+                            is_collected = true;
+                        end
+                        local button_prefix = is_collected and '[✓] ' or '[ ] ';
+
+                        if imgui.Button(button_prefix .. loc.alias .. '##Btn_' .. command_prefix .. loc.alias, { -1, 26 * scale }) then
                             if is_near_npc then
+                                -- Auto-collect when successfully warped
+                                if not state.settings.collected[system_key] then
+                                    state.settings.collected[system_key] = {};
+                                end
+                                state.settings.collected[system_key][loc.alias] = true;
+                                settings.save();
+                                
                                 AshitaCore:GetChatManager():QueueCommand(-1, command_prefix .. loc.alias);
                             else
                                 print(chat.header(addon.name) .. chat.error("Cannot warp: You must be near the appropriate NPC."));
@@ -485,6 +578,40 @@ local function render_ui()
 
         imgui.Spacing();
 
+        -- Uncollected Node Alert Banner
+        if state.uncollected_near then
+            imgui.PushStyleColor(ImGuiCol_ChildBg, { 0.35, 0.20, 0.05, 0.8 });
+            imgui.BeginChild('##UncollectedAlertChild', { 0, 36 * scale }, ImGuiChildFlags_Borders);
+                imgui.SetCursorPosX(10 * scale);
+                imgui.SetCursorPosY(8 * scale);
+                imgui.TextColored({ 1.0, 0.7, 0.2, 1.0 }, '⚠️ UNCOLLECTED:');
+                imgui.SameLine();
+                imgui.TextColored({ 0.95, 0.95, 0.95, 1.0 }, string.format('%s (%.1fy)', state.uncollected_near.alias, state.uncollected_near.dist));
+                
+                -- Collect Button on the right
+                imgui.SameLine();
+                local btn_width = 80 * scale;
+                imgui.SetCursorPosX(imgui.GetWindowWidth() - btn_width - 8 * scale);
+                imgui.SetCursorPosY(5 * scale);
+                imgui.PushStyleColor(ImGuiCol_Button, { 0.5, 0.3, 0.05, 1.0 });
+                imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 0.65, 0.4, 0.1, 1.0 });
+                imgui.PushStyleColor(ImGuiCol_ButtonActive, { 0.8, 0.5, 0.15, 1.0 });
+                if imgui.Button('Collect##AlertBtn', { btn_width, 24 * scale }) then
+                    local ukey = state.uncollected_near.key;
+                    local ualias = state.uncollected_near.alias;
+                    if not state.settings.collected[ukey] then
+                        state.settings.collected[ukey] = {};
+                    end
+                    state.settings.collected[ukey][ualias] = true;
+                    settings.save();
+                    print(chat.header(addon.name) .. chat.message(string.format("Marked %s: %s as collected!", state.uncollected_near.system_name, ualias)));
+                end
+                imgui.PopStyleColor(3);
+            imgui.EndChild();
+            imgui.PopStyleColor(1);
+            imgui.Spacing();
+        end
+
         -- Search Box with Clear Button
         local active_sys_name = active_sys and active_sys.name or "Locations";
         local placeholder = string.format('Search %s:', active_sys_name);
@@ -526,6 +653,27 @@ local function render_ui()
                 state.settings.scale = scale_tbl[1];
                 settings.save();
             end
+            
+            imgui.Separator();
+            
+            -- Collection Stats
+            local total_nodes = 0;
+            local collected_nodes = 0;
+            for _, key in ipairs(system_order) do
+                total_nodes = total_nodes + #state.locations[key];
+                if state.settings.collected[key] then
+                    for k, _ in pairs(state.settings.collected[key]) do
+                        collected_nodes = collected_nodes + 1;
+                    end
+                end
+            end
+            
+            imgui.Text(string.format('Collection Progress: %d / %d (%.1f%%)', collected_nodes, total_nodes, total_nodes > 0 and (collected_nodes / total_nodes * 100) or 0.0));
+            if imgui.Button('Reset Collection Data##ResetColl') then
+                state.settings.collected = {};
+                settings.save();
+                print(chat.header(addon.name) .. chat.message("Reset all warp collection data."));
+            end
             imgui.Unindent();
             imgui.Separator();
         end
@@ -539,7 +687,7 @@ local function render_ui()
                 if #state.locations[key] > 0 then
                     if imgui.BeginTabItem(sys.name .. '##Tab_' .. key) then
                         state.active_tab = key;
-                        render_locations_list(state.locations[key], state.proximity[key].near, sys.command);
+                        render_locations_list(key, state.locations[key], state.proximity[key].near, sys.command);
                         imgui.EndTabItem();
                     end
                 end
