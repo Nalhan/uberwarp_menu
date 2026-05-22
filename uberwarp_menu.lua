@@ -546,37 +546,42 @@ local function render_locations_list(system_key, locations_table, is_near_npc, c
                 if imgui.CollapsingHeader(zone_name .. '##Header_' .. command_prefix .. zone_name, tree_flags) then
                     imgui.Indent();
                     for _, loc in ipairs(grouped[zone_name]) do
-                        -- Dim/Disable button colors if not near NPC
-                        if not is_near_npc then
-                            imgui.PushStyleColor(ImGuiCol_Button, { 0.15, 0.15, 0.15, 0.5 });
-                            imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 0.15, 0.15, 0.15, 0.5 });
-                            imgui.PushStyleColor(ImGuiCol_ButtonActive, { 0.15, 0.15, 0.15, 0.5 });
-                            imgui.PushStyleColor(ImGuiCol_Text, { 0.5, 0.5, 0.5, 0.8 });
-                        end
-
                         -- Prepend checkmark depending on collected status
                         local is_collected = false;
                         if state.settings.collected[system_key] and state.settings.collected[system_key][loc.alias] then
                             is_collected = true;
                         end
+
+                        local is_clickable = is_near_npc and is_collected;
+
+                        -- Dim/Disable button colors if not clickable
+                        if not is_clickable then
+                            imgui.PushStyleColor(ImGuiCol_Button, { 0.12, 0.12, 0.12, 0.6 });
+                            imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 0.12, 0.12, 0.12, 0.6 });
+                            imgui.PushStyleColor(ImGuiCol_ButtonActive, { 0.12, 0.12, 0.12, 0.6 });
+                            imgui.PushStyleColor(ImGuiCol_Text, { 0.45, 0.45, 0.45, 0.7 });
+                        end
+
                         local button_prefix = is_collected and '[✓] ' or '[ ] ';
 
                         if imgui.Button(button_prefix .. loc.alias .. '##Btn_' .. command_prefix .. loc.alias, { -1, 26 * scale }) then
-                            if is_near_npc then
-                                -- Auto-collect when successfully warped
+                            if is_clickable then
+                                -- Auto-collect when successfully warped (redundant backup)
                                 if not state.settings.collected[system_key] then
                                     state.settings.collected[system_key] = {};
                                 end
                                 state.settings.collected[system_key][loc.alias] = true;
-                                settings.save();
+                                state.collected_dirty = true;
                                 
                                 AshitaCore:GetChatManager():QueueCommand(-1, command_prefix .. loc.alias);
-                            else
+                            elseif not is_near_npc then
                                 print(chat.header(addon.name) .. chat.error("Cannot warp: You must be near the appropriate NPC."));
+                            else
+                                print(chat.header(addon.name) .. chat.error("Cannot warp: You have not unlocked this destination yet."));
                             end
                         end
 
-                        if not is_near_npc then
+                        if not is_clickable then
                             imgui.PopStyleColor(4);
                         end
                     end
