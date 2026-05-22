@@ -353,10 +353,10 @@ local function update_proximity()
                         local dz = pz - loc.z;
                         local dist = math.sqrt(dx*dx + dy*dy + dz*dz);
                         
-                        if dist < 12.0 then
+                        if dist < 6.0 then
                             -- Ensure that a real NPC for this travel system is actually loaded and nearby.
                             -- This prevents false alerts for non-existent crystals (e.g. Upper Jeuno HP #4 on HorizonXI).
-                            local npc_near = (state.proximity[key].closest_dist < 15.0);
+                            local npc_near = (state.proximity[key].closest_dist < 8.0);
                             if npc_near then
                                 local is_collected = false;
                                 if state.settings.collected[key] and state.settings.collected[key][loc.alias] then
@@ -921,6 +921,17 @@ ashita.events.register('text_in', 'uberwarp_menu_text_in_cb', function (e)
                 state.collected_dirty = true;
             end
         end
+    end
+end);
+
+--[[
+* event: unload
+* desc : Event called when the addon is being unloaded. Flushes any pending collected node data.
+--]]
+ashita.events.register('unload', 'unload_cb', function ()
+    if state.collected_dirty then
+        settings.save();
+        state.collected_dirty = false;
     end
 end);
 
