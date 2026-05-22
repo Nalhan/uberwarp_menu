@@ -289,6 +289,58 @@ local function pop_custom_styles()
     imgui.PopStyleVar(3);
 end
 
+-- Search Expansion / Regional / Expansion Aliases mapping
+local search_aliases = {
+    -- Jeuno / Rulude
+    ['jeuno'] = { 'lower jeuno', 'port jeuno', 'upper jeuno', 'ru\'lude' },
+    ['rulude'] = { 'jeuno', 'lower jeuno', 'port jeuno', 'upper jeuno' },
+    
+    -- Bastok
+    ['bastok'] = { 'bastok markets', 'bastok mines', 'port bastok', 'metalworks' },
+    ['basty'] = { 'bastok', 'bastok markets', 'bastok mines', 'port bastok', 'metalworks' },
+    
+    -- San d'Oria
+    ['san d\'oria'] = { 'southern san d\'oria', 'northern san d\'oria', 'port san d\'oria', 'chateau d\'oraguille' },
+    ['sandy'] = { 'san d\'oria', 'southern san d\'oria', 'northern san d\'oria', 'port san d\'oria', 'chateau d\'oraguille' },
+    
+    -- Windurst
+    ['windurst'] = { 'windurst woods', 'windurst waters', 'windurst walls', 'port windurst', 'heavens tower' },
+    ['windy'] = { 'windurst', 'windurst woods', 'windurst waters', 'windurst walls', 'port windurst', 'heavens tower' },
+    
+    -- Zilart / RoZ
+    ['zilart'] = { 'norg', 'rabao', 'kazham', 'ru\'aun gardens', 'the sanctuary of zi\'tah', 'ro\'maeve', 'temple of uggalepih' },
+    ['roz'] = { 'zilart', 'norg', 'rabao', 'kazham', 'ru\'aun gardens', 'the sanctuary of zi\'tah', 'ro\'maeve', 'temple of uggalepih' },
+    ['norg'] = { 'zilart' },
+    ['rabao'] = { 'zilart' },
+    ['kazham'] = { 'zilart' },
+    
+    -- Promathia / CoP
+    ['promathia'] = { 'tavnazian safehold', 'lufaise meadows', 'misareaux coast', 'phomiuna aqueducts', 'sacrarium', 'al\'taieu', 'grand palace of hu\'xzoi', 'the garden of ru\'hmet' },
+    ['cop'] = { 'promathia', 'tavnazian safehold', 'lufaise meadows', 'misareaux coast', 'phomiuna aqueducts', 'sacrarium', 'al\'taieu', 'grand palace of hu\'xzoi', 'the garden of ru\'hmet' },
+    ['tavnazia'] = { 'tavnazian safehold', 'promathia' },
+    
+    -- Aht Urhgan / ToAU
+    ['aht urhgan'] = { 'aht urhgan whitegate', 'al zahbi', 'nashmau', 'wajaom woodlands', 'bhaflau thickets', 'caedarva mire', 'mount zhayolm', 'halvung', 'mamook', 'arrapago reef' },
+    ['toau'] = { 'aht urhgan', 'aht urhgan whitegate', 'al zahbi', 'nashmau', 'wajaom woodlands', 'bhaflau thickets', 'caedarva mire', 'mount zhayolm', 'halvung', 'mamook', 'arrapago reef' },
+    ['whitegate'] = { 'aht urhgan' },
+    ['nashmau'] = { 'aht urhgan' },
+    
+    -- Shadowreign / WotG
+    ['shadowreign'] = { '[s]' },
+    ['wotg'] = { '[s]', 'shadowreign' },
+    
+    -- Adoulin / SoA
+    ['adoulin'] = { 'western adoulin', 'eastern adoulin', 'celennia memorial library', 'yahse wildwood', 'ceizak battlegrounds', 'foret de hennetiel', 'morimar basalt fields', 'marjami ravine', 'yorcia weald', 'kamihr drifts', 'doh gates', 'sih gates', 'moh gates' },
+    ['soa'] = { 'adoulin', 'western adoulin', 'eastern adoulin', 'celennia memorial library', 'yahse wildwood', 'ceizak battlegrounds', 'foret de hennetiel', 'morimar basalt fields', 'marjami ravine', 'yorcia weald', 'kamihr drifts', 'doh gates', 'sih gates', 'moh gates' },
+    
+    -- Escha
+    ['escha'] = { 'escha - zi\'tah', 'escha - ru\'aun', 'reisenjima' },
+    ['reisenjima'] = { 'escha' },
+    
+    -- Abyssea
+    ['abyssea'] = { 'abyssea - attohwa', 'abyssea - konschtat', 'abyssea - la theine', 'abyssea - tahrongi', 'abyssea - vunkerl', 'abyssea - misareaux', 'abyssea - altepa', 'abyssea - uleguerand', 'abyssea - grauberg' },
+};
+
 --[[
 * Renders a list of locations grouped by zone and applies proximity locking
 --]]
@@ -297,12 +349,31 @@ local function render_locations_list(locations_table, is_near_npc, command_prefi
     local grouped = {};
     local zones_ordered = {};
 
+    -- Precompute query search terms including aliases
+    local search_terms = { query };
+    if query ~= "" then
+        for k, list in pairs(search_aliases) do
+            if k:find(query, 1, true) then
+                for _, term in ipairs(list) do
+                    table.insert(search_terms, term);
+                end
+            end
+        end
+    end
+
     for _, loc in ipairs(locations_table) do
         local matches = true;
         if query ~= "" then
-            local alias_match = loc.alias:lower():find(query, 1, true) ~= nil;
-            local zone_match = loc.zone_name:lower():find(query, 1, true) ~= nil;
-            matches = alias_match or zone_match;
+            local matched_any = false;
+            local alias_lower = loc.alias:lower();
+            local zone_lower = loc.zone_name:lower();
+            for _, term in ipairs(search_terms) do
+                if alias_lower:find(term, 1, true) or zone_lower:find(term, 1, true) then
+                    matched_any = true;
+                    break;
+                end
+            end
+            matches = matched_any;
         end
 
         if matches then
