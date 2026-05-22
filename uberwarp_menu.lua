@@ -562,9 +562,7 @@ local function render_locations_list(system_key, locations_table, is_near_npc, c
                             imgui.PushStyleColor(ImGuiCol_Text, { 0.45, 0.45, 0.45, 0.7 });
                         end
 
-                        local button_prefix = is_collected and '[✓] ' or '[ ] ';
-
-                        if imgui.Button(button_prefix .. loc.alias .. '##Btn_' .. command_prefix .. loc.alias, { -1, 26 * scale }) then
+                        if imgui.Button(loc.alias .. '##Btn_' .. command_prefix .. loc.alias, { -1, 26 * scale }) then
                             if is_clickable then
                                 -- Auto-collect when successfully warped (redundant backup)
                                 if not state.settings.collected[system_key] then
