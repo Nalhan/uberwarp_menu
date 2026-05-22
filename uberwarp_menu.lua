@@ -24,6 +24,7 @@ local default_settings = T{
     alpha      = 0.95,
     scale      = 1.0,
     collected  = {},
+    synced_systems = {},
 };
 
 -- Supported Uberwarp Systems Configuration
@@ -112,11 +113,45 @@ local state = {
     active_tab         = 'hp',
     npc_trigger_active = false, -- Remembers if auto-open has already triggered for this encounter
     settings           = settings.load(default_settings),
+    collected_dirty    = false,
 };
+
+-- Uberwarp CHECK output system names map to internal keys
+local check_system_map = {
+    ['HomePoint'] = 'hp',
+    ['SurvivalGuide'] = 'sg',
+    ['Waypoint'] = 'wp',
+    ['UnityWarp'] = 'uc',
+    ['ProtoWaypoint'] = 'pw',
+    ['EschanPortal'] = 'ep',
+    ['AbysseaConflux'] = 'ab',
+    ['RunicPortal'] = 'rp'
+};
+
+local function sync_warp_nodes()
+    local check_commands = {
+        '/uw hp check',
+        '/uw sg check',
+        '/uw wp check',
+        '/uw uc check',
+        '/uw pw check',
+        '/uw ep check',
+        '/uw ab check',
+        '/uw rp check'
+    };
+    for _, cmd in ipairs(check_commands) do
+        AshitaCore:GetChatManager():QueueCommand(-1, cmd);
+    end
+    print(chat.header(addon.name) .. chat.message("Syncing all collected nodes with Uberwarp in the background..."));
+end
 
 -- Ensure collected settings table is initialized
 if not state.settings.collected then
     state.settings.collected = {};
+end
+
+if not state.settings.synced_systems then
+    state.settings.synced_systems = {};
 end
 
 if state.settings.auto_open_uncollected == nil then
@@ -252,6 +287,20 @@ local function update_proximity()
         end
     end
 
+    -- Check for first-time system synchronization when encountering a node type
+    for _, key in ipairs(system_order) do
+        if state.proximity[key].near and not state.settings.synced_systems[key] then
+            state.settings.synced_systems[key] = true;
+            settings.save();
+            
+            local sys = systems[key];
+            if sys then
+                AshitaCore:GetChatManager():QueueCommand(-1, sys.command .. 'CHECK');
+                print(chat.header(addon.name) .. chat.message(string.format("First encounter with %s NPC. Initializing obtained node list from Uberwarp...", sys.name)));
+            end
+        end
+    end
+
     -- Smart Proximity Latch: Auto-open / auto-close behavior based on proximity to any active system NPC
     local any_near = false;
     for _, key in ipairs(system_order) do
@@ -300,20 +349,25 @@ local function update_proximity()
                         local dist = math.sqrt(dx*dx + dy*dy + dz*dz);
                         
                         if dist < 12.0 then
-                            local is_collected = false;
-                            if state.settings.collected[key] and state.settings.collected[key][loc.alias] then
-                                is_collected = true;
-                            end
-                            
-                            if not is_collected then
-                                if dist < closest_uncollected_dist then
-                                    closest_uncollected_dist = dist;
-                                    closest_uncollected_node = {
-                                        key = key,
-                                        alias = loc.alias,
-                                        dist = dist,
-                                        system_name = sys.name
-                                    };
+                            -- Ensure that a real NPC for this travel system is actually loaded and nearby.
+                            -- This prevents false alerts for non-existent crystals (e.g. Upper Jeuno HP #4 on HorizonXI).
+                            local npc_near = (state.proximity[key].closest_dist < 15.0);
+                            if npc_near then
+                                local is_collected = false;
+                                if state.settings.collected[key] and state.settings.collected[key][loc.alias] then
+                                    is_collected = true;
+                                end
+                                
+                                if not is_collected then
+                                    if dist < closest_uncollected_dist then
+                                        closest_uncollected_dist = dist;
+                                        closest_uncollected_node = {
+                                            key = key,
+                                            alias = loc.alias,
+                                            dist = dist,
+                                            system_name = sys.name
+                                        };
+                                    end
                                 end
                             end
                         end
@@ -538,6 +592,11 @@ end
 * Renders the searchable list and proximity status
 --]]
 local function render_ui()
+    if state.collected_dirty then
+        settings.save();
+        state.collected_dirty = false;
+    end
+
     update_proximity();
 
     if not state.is_open[1] then
@@ -689,10 +748,16 @@ local function render_ui()
             end
             
             imgui.Text(string.format('Collection Progress: %d / %d (%.1f%%)', collected_nodes, total_nodes, total_nodes > 0 and (collected_nodes / total_nodes * 100) or 0.0));
-            if imgui.Button('Reset Collection Data##ResetColl') then
+            
+            if imgui.Button('Sync with Uberwarp##SyncColl', { -1, 24 * scale }) then
+                sync_warp_nodes();
+            end
+            
+            if imgui.Button('Reset Collection Data##ResetColl', { -1, 24 * scale }) then
                 state.settings.collected = {};
+                state.settings.synced_systems = {};
                 settings.save();
-                print(chat.header(addon.name) .. chat.message("Reset all warp collection data."));
+                print(chat.header(addon.name) .. chat.message("Reset all warp collection data and sync history."));
             end
             imgui.Unindent();
             imgui.Separator();
@@ -754,6 +819,36 @@ ashita.events.register('command', 'command_cb', function (e)
         e.blocked = true;
         state.is_open[1] = not state.is_open[1];
         return;
+    end
+end);
+
+-- Clean and strip colors/control codes from chat messages
+local function strip_color_codes(str)
+    if not str then return '' end
+    local cleaned = str:gsub('|c%x%x%x%x%x%x%x%x|', ''):gsub('|r|', '');
+    cleaned = cleaned:gsub('\x1e%x', ''):gsub('\x1f%x', ''):gsub('\x07', '');
+    return cleaned:trim();
+end
+
+-- Intercept and parse Uberwarp check commands output
+ashita.events.register('text_in', 'uberwarp_menu_text_in_cb', function (e)
+    local cleaned = strip_color_codes(e.message);
+    if cleaned == '' then return end
+    
+    -- Match format: [Uberwarp:<SystemName>] <Alias> : <Status>
+    local system_name, alias, status = cleaned:match('%[Uberwarp:([%a]+)%]%s*(.-)%s*:%s*(%a+)');
+    if system_name and alias and status then
+        local key = check_system_map[system_name];
+        if key then
+            local is_unlocked = (status:lower() == 'unlocked');
+            if is_unlocked then
+                if not state.settings.collected[key] then
+                    state.settings.collected[key] = {};
+                end
+                state.settings.collected[key][alias] = true;
+                state.collected_dirty = true;
+            end
+        end
     end
 end);
 
