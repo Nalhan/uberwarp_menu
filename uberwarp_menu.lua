@@ -20,6 +20,7 @@ local chat     = require 'chat';
 local default_settings = T{
     auto_open  = false,
     auto_close = false,
+    auto_open_uncollected = true,
     alpha      = 0.95,
     scale      = 1.0,
     collected  = {},
@@ -116,6 +117,10 @@ local state = {
 -- Ensure collected settings table is initialized
 if not state.settings.collected then
     state.settings.collected = {};
+end
+
+if state.settings.auto_open_uncollected == nil then
+    state.settings.auto_open_uncollected = true;
 end
 
 -- Initialize locations and proximity structures
@@ -327,9 +332,18 @@ local function update_proximity()
             print(chat.header(addon.name) .. chat.warning(string.format("Ran past uncollected %s: %s!", closest_uncollected_node.system_name, closest_uncollected_node.alias)));
             state.last_chat_alert = alert_key;
         end
+
+        -- Auto-open the window if configured and not already open
+        if state.settings.auto_open_uncollected and state.last_uncollected_trigger ~= alert_key then
+            state.last_uncollected_trigger = alert_key;
+            if not state.is_open[1] then
+                state.is_open[1] = true;
+            end
+        end
     else
         state.uncollected_near = nil;
         state.last_chat_alert = nil;
+        state.last_uncollected_trigger = nil;
     end
 end
 
@@ -631,6 +645,12 @@ local function render_ui()
             local auto_open_tbl = { state.settings.auto_open };
             if imgui.Checkbox('Auto-Open near NPC', auto_open_tbl) then
                 state.settings.auto_open = auto_open_tbl[1];
+                settings.save();
+            end
+
+            local auto_open_uncol_tbl = { state.settings.auto_open_uncollected };
+            if imgui.Checkbox('Auto-Open on Uncollected Node', auto_open_uncol_tbl) then
+                state.settings.auto_open_uncollected = auto_open_uncol_tbl[1];
                 settings.save();
             end
 
