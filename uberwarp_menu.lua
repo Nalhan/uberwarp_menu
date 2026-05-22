@@ -15,6 +15,7 @@ require 'common';
 local imgui    = require 'imgui';
 local settings = require 'settings';
 local chat     = require 'chat';
+local bit      = require 'bit';
 
 -- Default Settings
 local default_settings = T{
@@ -25,6 +26,7 @@ local default_settings = T{
     scale      = 1.0,
     collected  = {},
     synced_systems = {},
+    show_debug = false,
 };
 
 -- Supported Uberwarp Systems Configuration
@@ -248,23 +250,26 @@ local function update_proximity()
     for i = 0, 2304 do
         local ent = GetEntity(i);
         if ent and ent.Name then
-            local name = ent.Name:trimend('\x00');
-            for _, key in ipairs(system_order) do
-                local sys = systems[key];
-                if #state.locations[key] > 0 then
-                    local matched = false;
-                    for _, pattern in ipairs(sys.npc_patterns) do
-                        if name:find(pattern, 1, true) then
-                            matched = true;
-                            break;
+            local is_pc = (ent.SpawnFlags and bit.band(ent.SpawnFlags, 0x0001) ~= 0);
+            if not is_pc then
+                local name = ent.Name:trimend('\x00');
+                for _, key in ipairs(system_order) do
+                    local sys = systems[key];
+                    if #state.locations[key] > 0 then
+                        local matched = false;
+                        for _, pattern in ipairs(sys.npc_patterns) do
+                            if name:find(pattern, 1, true) then
+                                matched = true;
+                                break;
+                            end
                         end
-                    end
-                    if matched then
-                        local dist_sq = ent.Distance; -- ent.Distance is distance squared
-                        if dist_sq < closest_dists[key] then
-                            closest_dists[key] = dist_sq;
-                            closest_names[key] = name;
-                            found_any[key] = true;
+                        if matched then
+                            local dist_sq = ent.Distance; -- ent.Distance is distance squared
+                            if dist_sq < closest_dists[key] then
+                                closest_dists[key] = dist_sq;
+                                closest_names[key] = name;
+                                found_any[key] = true;
+                            end
                         end
                     end
                 end
@@ -721,6 +726,12 @@ local function render_ui()
                 state.settings.auto_close = auto_close_tbl[1];
                 settings.save();
             end
+
+            local show_debug_tbl = { state.settings.show_debug or false };
+            if imgui.Checkbox('Show Debug Info', show_debug_tbl) then
+                state.settings.show_debug = show_debug_tbl[1];
+                settings.save();
+            end
             
             imgui.Text('Menu Transparency:');
             local alpha_tbl = { state.settings.alpha };
@@ -764,6 +775,64 @@ local function render_ui()
             end
             imgui.Unindent();
             imgui.Separator();
+        end
+
+        -- Debug Info collapsible header (only shown if enabled)
+        if state.settings.show_debug then
+            imgui.Spacing();
+            if imgui.CollapsingHeader('🔍 Proximity Debugger##DebugHeader', ImGuiTreeNodeFlags_DefaultOpen) then
+                imgui.Indent();
+                
+                imgui.TextColored({ 0.7, 0.8, 1.0, 1.0 }, 'Detected System NPCs:');
+                for _, key in ipairs(system_order) do
+                    local prox = state.proximity[key];
+                    local sys = systems[key];
+                    if prox.closest_name ~= '' then
+                        imgui.Text(string.format('%s: %s (%.1fy)', sys.name, prox.closest_name, prox.closest_dist));
+                    else
+                        imgui.TextColored({ 0.5, 0.5, 0.5, 1.0 }, string.format('%s: None', sys.name));
+                    end
+                end
+                
+                imgui.Separator();
+                
+                imgui.TextColored({ 0.7, 0.8, 1.0, 1.0 }, 'All matching entities in range (<50y):');
+                local found_matching_ent = false;
+                for i = 0, 2304 do
+                    local ent = GetEntity(i);
+                    if ent and ent.Name then
+                        local name = ent.Name:trimend('\x00');
+                        local matched_keys = {};
+                        for _, key in ipairs(system_order) do
+                            local sys = systems[key];
+                            for _, pattern in ipairs(sys.npc_patterns) do
+                                if name:find(pattern, 1, true) then
+                                    table.insert(matched_keys, sys.name);
+                                    break;
+                                end
+                            end
+                        end
+                        if #matched_keys > 0 then
+                            local dist = math.sqrt(ent.Distance);
+                            if dist < 50.0 then
+                                found_matching_ent = true;
+                                local is_pc = (ent.SpawnFlags and bit.band(ent.SpawnFlags, 0x0001) ~= 0);
+                                local flag_str = string.format('0x%04X', ent.SpawnFlags or 0);
+                                local pc_tag = is_pc and ' [PLAYER]' or ' [NPC/MOB]';
+                                imgui.Text(string.format('[%d] %s (%.1fy) Flags:%s%s', i, name, dist, flag_str, pc_tag));
+                                imgui.SameLine();
+                                imgui.TextColored({ 0.5, 0.7, 1.0, 1.0 }, ' -> ' .. table.concat(matched_keys, ', '));
+                            end
+                        end
+                    end
+                end
+                if not found_matching_ent then
+                    imgui.TextColored({ 0.5, 0.5, 0.5, 1.0 }, 'No matching entities in 50y.');
+                end
+                
+                imgui.Unindent();
+                imgui.Separator();
+            end
         end
 
         imgui.Spacing();
