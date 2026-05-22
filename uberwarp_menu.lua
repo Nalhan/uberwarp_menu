@@ -345,6 +345,7 @@ local search_aliases = {
 * Renders a list of locations grouped by zone and applies proximity locking
 --]]
 local function render_locations_list(locations_table, is_near_npc, command_prefix)
+    local scale = state.settings.scale or 1.0;
     local query = state.search_text[1]:gsub('%z', ''):trim():lower();
     local grouped = {};
     local zones_ordered = {};
@@ -406,7 +407,7 @@ local function render_locations_list(locations_table, is_near_npc, command_prefi
                             imgui.PushStyleColor(ImGuiCol_Text, { 0.5, 0.5, 0.5, 0.8 });
                         end
 
-                        if imgui.Button(loc.alias .. '##Btn_' .. command_prefix .. loc.alias, { -1, 26 }) then
+                        if imgui.Button(loc.alias .. '##Btn_' .. command_prefix .. loc.alias, { -1, 26 * scale }) then
                             if is_near_npc then
                                 AshitaCore:GetChatManager():QueueCommand(-1, command_prefix .. loc.alias);
                             else
@@ -438,9 +439,9 @@ local function render_ui()
 
     push_custom_styles();
 
-    imgui.SetNextWindowSize({ 380, 520 }, ImGuiCond_FirstUseEver);
+    local scale = state.settings.scale or 1.0;
+    imgui.SetNextWindowSize({ 380 * scale, 520 * scale }, ImGuiCond_FirstUseEver);
     if imgui.Begin('Uberwarp Menu##UWM_Window', state.is_open, ImGuiWindowFlags_NoCollapse) then
-        imgui.SetWindowFontScale(state.settings.scale or 1.0);
         
         -- Proximity Status Bar based on Active Tab
         local active_sys = systems[state.active_tab];
@@ -457,9 +458,9 @@ local function render_ui()
 
         if is_near then
             imgui.PushStyleColor(ImGuiCol_ChildBg, { 0.10, 0.25, 0.12, 0.8 });
-            imgui.BeginChild('##StatusChild', { 0, 36 }, ImGuiChildFlags_Borders);
-                imgui.SetCursorPosX(10);
-                imgui.SetCursorPosY(8);
+            imgui.BeginChild('##StatusChild', { 0, 36 * scale }, ImGuiChildFlags_Borders);
+                imgui.SetCursorPosX(10 * scale);
+                imgui.SetCursorPosY(8 * scale);
                 imgui.TextColored({ 0.2, 1.0, 0.3, 1.0 }, 'READY');
                 imgui.SameLine();
                 imgui.TextColored({ 0.9, 0.9, 0.9, 1.0 }, string.format('- Near %s (%.1f yalms)', npc_name, npc_dist));
@@ -467,9 +468,9 @@ local function render_ui()
             imgui.PopStyleColor(1);
         else
             imgui.PushStyleColor(ImGuiCol_ChildBg, { 0.25, 0.10, 0.10, 0.8 });
-            imgui.BeginChild('##StatusChild', { 0, 36 }, ImGuiChildFlags_Borders);
-                imgui.SetCursorPosX(10);
-                imgui.SetCursorPosY(8);
+            imgui.BeginChild('##StatusChild', { 0, 36 * scale }, ImGuiChildFlags_Borders);
+                imgui.SetCursorPosX(10 * scale);
+                imgui.SetCursorPosY(8 * scale);
                 imgui.TextColored({ 1.0, 0.3, 0.2, 1.0 }, 'WARNING');
                 imgui.SameLine();
                 if npc_name ~= '' then
@@ -490,7 +491,7 @@ local function render_ui()
         imgui.TextColored({ 0.7, 0.8, 1.0, 1.0 }, placeholder);
         imgui.InputText('##SearchInput', state.search_text, 64);
         imgui.SameLine();
-        if imgui.Button('Clear##ClearSearch', { 50, 0 }) then
+        if imgui.Button('Clear##ClearSearch', { 50 * scale, 0 }) then
             state.search_text[1] = '';
         end
 
