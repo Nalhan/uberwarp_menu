@@ -1,13 +1,13 @@
 --[[
-* uberwarp_menu - Searchable Home Point and Survival Guide warp list using Uberwarp
+* uberwarp_menu - Searchable travel menu for all 10 major travel systems using Uberwarp
 * Author: Antigravity
-* Version: 1.1
+* Version: 1.2
 --]]
 
 addon.name      = 'uberwarp_menu';
 addon.author    = 'Antigravity';
-addon.version   = '1.1';
-addon.desc      = 'Searchable ImGui menu of Home Point and Survival Guide warp locations using Uberwarp.';
+addon.version   = '1.2';
+addon.desc      = 'Searchable ImGui menu for all 10 major travel systems supported by Uberwarp.';
 addon.link      = '';
 
 require 'common';
@@ -23,33 +23,117 @@ local default_settings = T{
     alpha      = 0.95,
 };
 
+-- Supported Uberwarp Systems Configuration
+local systems = {
+    hp = {
+        key = 'hp',
+        name = 'Home Points',
+        xml = 'homepoint.xml',
+        command = '/uw hp ',
+        npc_patterns = { 'Home Point' }
+    },
+    sg = {
+        key = 'sg',
+        name = 'Survival Guides',
+        xml = 'survivalguide.xml',
+        command = '/uw sg ',
+        npc_patterns = { 'Survival Guide' }
+    },
+    wp = {
+        key = 'wp',
+        name = 'Waypoints',
+        xml = 'waypoint.xml',
+        command = '/uw wp ',
+        npc_patterns = { 'Waypoint', 'Geomagnetic Fount' }
+    },
+    pw = {
+        key = 'pw',
+        name = 'Proto-Waypoints',
+        xml = 'protowaypoint.xml',
+        command = '/uw pw ',
+        npc_patterns = { 'Proto-Waypoint' }
+    },
+    uc = {
+        key = 'uc',
+        name = 'Unity Concord',
+        xml = 'unitywarp.xml',
+        command = '/uw uc ',
+        npc_patterns = { 'Shiftrix', 'Irena', 'Concord', 'Assault Director' }
+    },
+    ep = {
+        key = 'ep',
+        name = 'Eschan Portals',
+        xml = 'eschanportal.xml',
+        command = '/uw ep ',
+        npc_patterns = { 'Eschan Portal', 'Ethereal Ingress' }
+    },
+    ab = {
+        key = 'ab',
+        name = 'Abyssea Confluxes',
+        xml = 'abysseaconflux.xml',
+        command = '/uw ab ',
+        npc_patterns = { 'Conflux' }
+    },
+    aw = {
+        key = 'aw',
+        name = 'Abyssea Warps',
+        xml = 'abysseawarp.xml',
+        command = '/uw aw ',
+        npc_patterns = { 'Horst', 'Vincent', 'Ivan', 'Cavernous Maw' }
+    },
+    rp = {
+        key = 'rp',
+        name = 'Runic Portals',
+        xml = 'runicportal.xml',
+        command = '/uw rp ',
+        npc_patterns = { 'Runic Portal', 'Runic Transfer' }
+    },
+    ev = {
+        key = 'ev',
+        name = 'Elvorseal',
+        xml = 'elvorseal.xml',
+        command = '/uw ev ',
+        npc_patterns = { 'Dimensional Portal', 'Eschan Portal', 'Ethereal Ingress' }
+    }
+};
+
+-- Deterministic tab render order
+local system_order = { 'hp', 'sg', 'wp', 'pw', 'uc', 'ep', 'ab', 'aw', 'rp', 'ev' };
+
 -- State Variables
 local state = {
     is_open            = { false },
     search_text        = { '' },
-    homepoints         = {},
-    survivalguides     = {},
-    near_hp            = false,
-    near_sg            = false,
-    closest_hp_name    = '',
-    closest_hp_dist    = 999.0,
-    closest_sg_name    = '',
-    closest_sg_dist    = 999.0,
-    active_tab         = 'hp', -- 'hp' or 'sg'
+    locations          = {}, -- Map of key -> locations list
+    proximity          = {}, -- Map of key -> proximity state
+    active_tab         = 'hp',
     npc_trigger_active = false, -- Remembers if auto-open has already triggered for this encounter
     settings           = settings.load(default_settings),
 };
 
+-- Initialize locations and proximity structures
+for _, key in ipairs(system_order) do
+    state.locations[key] = {};
+    state.proximity[key] = {
+        near = false,
+        closest_name = '',
+        closest_dist = 999.0
+    };
+end
+
 --[[
-* Loads and parses home points from resources/ashitahelper/uberwarp/homepoint.xml
+* Loads and parses locations from the corresponding XML resource file
 --]]
-local function load_homepoints()
-    state.homepoints = {};
+local function load_system_locations(key)
+    local sys = systems[key];
+    if not sys then return end;
+
+    state.locations[key] = {};
     local install_path = AshitaCore:GetInstallPath();
-    local xml_path = install_path .. 'resources/ashitahelper/uberwarp/homepoint.xml';
+    local xml_path = install_path .. 'resources/ashitahelper/uberwarp/' .. sys.xml;
     local f = io.open(xml_path, 'r');
     if not f then
-        print(chat.header(addon.name) .. chat.error("Could not find 'resources/ashitahelper/uberwarp/homepoint.xml'! Make sure Uberwarp is loaded/installed."));
+        -- Silently fail or don't complain if resource isn't present
         return;
     end
 
@@ -66,7 +150,7 @@ local function load_homepoints()
                 -- Trim trailing null bytes and whitespace
                 zone_name = zone_name:trimend('\x00'):trim();
             end
-            table.insert(state.homepoints, {
+            table.insert(state.locations[key], {
                 alias = alias,
                 zone_id = zone_id,
                 zone_name = zone_name
@@ -75,119 +159,88 @@ local function load_homepoints()
         end
     end
     f:close();
-    print(chat.header(addon.name) .. chat.message("Successfully loaded " .. count .. " Home Point warp locations."));
+    
+    if count > 0 then
+        print(chat.header(addon.name) .. chat.message(string.format("Successfully loaded %d %s warp locations.", count, sys.name)));
+    end
 end
 
 --[[
-* Loads and parses survival guides from resources/ashitahelper/uberwarp/survivalguide.xml
---]]
-local function load_survivalguides()
-    state.survivalguides = {};
-    local install_path = AshitaCore:GetInstallPath();
-    local xml_path = install_path .. 'resources/ashitahelper/uberwarp/survivalguide.xml';
-    local f = io.open(xml_path, 'r');
-    if not f then
-        print(chat.header(addon.name) .. chat.error("Could not find 'resources/ashitahelper/uberwarp/survivalguide.xml'! Make sure Uberwarp is loaded/installed."));
-        return;
-    end
-
-    local count = 0;
-    for line in f:lines() do
-        local alias = line:match('alias="([^"]+)"');
-        local zone_str = line:match('zone="([%d]+)"');
-        if alias and zone_str then
-            local zone_id = tonumber(zone_str);
-            local zone_name = AshitaCore:GetResourceManager():GetString('zones.names', zone_id);
-            if not zone_name or zone_name == "" then
-                zone_name = "Unknown Zone (" .. zone_id .. ")";
-            else
-                -- Trim trailing null bytes and whitespace
-                zone_name = zone_name:trimend('\x00'):trim();
-            end
-            table.insert(state.survivalguides, {
-                alias = alias,
-                zone_id = zone_id,
-                zone_name = zone_name
-            });
-            count = count + 1;
-        end
-    end
-    f:close();
-    print(chat.header(addon.name) .. chat.message("Successfully loaded " .. count .. " Survival Guide warp locations."));
-end
-
---[[
-* Scans all active entities to detect proximity to a "Home Point" or "Survival Guide" NPC
+* Scans all active entities to detect proximity to configured NPC types
 --]]
 local function update_proximity()
     local player = GetPlayerEntity();
     if not player then
-        state.near_hp = false;
-        state.near_sg = false;
-        state.closest_hp_name = '';
-        state.closest_hp_dist = 999.0;
-        state.closest_sg_name = '';
-        state.closest_sg_dist = 999.0;
+        for _, key in ipairs(system_order) do
+            state.proximity[key].near = false;
+            state.proximity[key].closest_name = '';
+            state.proximity[key].closest_dist = 999.0;
+        end
         state.npc_trigger_active = false;
         return;
     end
 
-    local closest_hp_dist = 999999.0;
-    local closest_hp_name = '';
-    local found_hp = false;
+    local closest_dists = {};
+    local closest_names = {};
+    local found_any = {};
 
-    local closest_sg_dist = 999999.0;
-    local closest_sg_name = '';
-    local found_sg = false;
+    for _, key in ipairs(system_order) do
+        closest_dists[key] = 999999.0;
+        closest_names[key] = '';
+        found_any[key] = false;
+    end
 
     for i = 0, 2304 do
         local ent = GetEntity(i);
         if ent and ent.Name then
             local name = ent.Name:trimend('\x00');
-            if name:sub(1, 10) == "Home Point" then
-                local dist_sq = ent.Distance; -- ent.Distance is distance squared
-                if dist_sq < closest_hp_dist then
-                    closest_hp_dist = dist_sq;
-                    closest_hp_name = name;
-                    found_hp = true;
-                end
-            elseif name:sub(1, 14) == "Survival Guide" then
-                local dist_sq = ent.Distance; -- ent.Distance is distance squared
-                if dist_sq < closest_sg_dist then
-                    closest_sg_dist = dist_sq;
-                    closest_sg_name = name;
-                    found_sg = true;
+            for _, key in ipairs(system_order) do
+                local sys = systems[key];
+                if #state.locations[key] > 0 then
+                    local matched = false;
+                    for _, pattern in ipairs(sys.npc_patterns) do
+                        if name:find(pattern, 1, true) then
+                            matched = true;
+                            break;
+                        end
+                    end
+                    if matched then
+                        local dist_sq = ent.Distance; -- ent.Distance is distance squared
+                        if dist_sq < closest_dists[key] then
+                            closest_dists[key] = dist_sq;
+                            closest_names[key] = name;
+                            found_any[key] = true;
+                        end
+                    end
                 end
             end
         end
     end
 
-    -- Process Home Points
-    if found_hp then
-        local actual_dist = math.sqrt(closest_hp_dist);
-        state.closest_hp_dist = actual_dist;
-        state.closest_hp_name = closest_hp_name;
-        state.near_hp = (actual_dist < 6.0);
-    else
-        state.near_hp = false;
-        state.closest_hp_name = '';
-        state.closest_hp_dist = 999.0;
+    -- Process distances and set proximity flags
+    for _, key in ipairs(system_order) do
+        local prox = state.proximity[key];
+        if found_any[key] then
+            local actual_dist = math.sqrt(closest_dists[key]);
+            prox.closest_dist = actual_dist;
+            prox.closest_name = closest_names[key];
+            prox.near = (actual_dist < 6.0);
+        else
+            prox.near = false;
+            prox.closest_name = '';
+            prox.closest_dist = 999.0;
+        end
     end
 
-    -- Process Survival Guides
-    if found_sg then
-        local actual_dist = math.sqrt(closest_sg_dist);
-        state.closest_sg_dist = actual_dist;
-        state.closest_sg_name = closest_sg_name;
-        state.near_sg = (actual_dist < 6.0);
-    else
-        state.near_sg = false;
-        state.closest_sg_name = '';
-        state.closest_sg_dist = 999.0;
+    -- Smart Proximity Latch: Auto-open / auto-close behavior based on proximity to any active system NPC
+    local any_near = false;
+    for _, key in ipairs(system_order) do
+        if #state.locations[key] > 0 and state.proximity[key].near then
+            any_near = true;
+            break;
+        end
     end
 
-    -- Auto-open / auto-close behavior based on proximity to EITHER NPC type
-    local any_near = state.near_hp or state.near_sg;
     if any_near then
         if not state.npc_trigger_active then
             state.npc_trigger_active = true;
@@ -317,18 +370,16 @@ local function render_ui()
     if imgui.Begin('Uberwarp Menu##UWM_Window', state.is_open, ImGuiWindowFlags_NoCollapse) then
         
         -- Proximity Status Bar based on Active Tab
+        local active_sys = systems[state.active_tab];
         local is_near = false;
         local npc_name = '';
         local npc_dist = 999.0;
         
-        if state.active_tab == 'hp' then
-            is_near = state.near_hp;
-            npc_name = state.closest_hp_name;
-            npc_dist = state.closest_hp_dist;
-        elseif state.active_tab == 'sg' then
-            is_near = state.near_sg;
-            npc_name = state.closest_sg_name;
-            npc_dist = state.closest_sg_dist;
+        if active_sys then
+            local prox = state.proximity[state.active_tab];
+            is_near = prox.near;
+            npc_name = prox.closest_name;
+            npc_dist = prox.closest_dist;
         end
 
         if is_near then
@@ -351,8 +402,8 @@ local function render_ui()
                 if npc_name ~= '' then
                     imgui.TextColored({ 0.9, 0.9, 0.9, 1.0 }, string.format('- Too far from %s (%.1f/6.0y)', npc_name, npc_dist));
                 else
-                    local npc_type_str = (state.active_tab == 'hp') and "Home Point" or "Survival Guide";
-                    imgui.TextColored({ 0.9, 0.9, 0.9, 1.0 }, string.format('- No %s detected nearby.', npc_type_str));
+                    local sys_name = active_sys and active_sys.name or "appropriate";
+                    imgui.TextColored({ 0.9, 0.9, 0.9, 1.0 }, string.format('- No %s NPC detected nearby.', sys_name));
                 end
             imgui.EndChild();
             imgui.PopStyleColor(1);
@@ -361,7 +412,8 @@ local function render_ui()
         imgui.Spacing();
 
         -- Search Box with Clear Button
-        local placeholder = (state.active_tab == 'hp') and 'Search Home Points:' or 'Search Survival Guides:';
+        local active_sys_name = active_sys and active_sys.name or "Locations";
+        local placeholder = string.format('Search %s:', active_sys_name);
         imgui.TextColored({ 0.7, 0.8, 1.0, 1.0 }, placeholder);
         imgui.InputText('##SearchInput', state.search_text, 64);
         imgui.SameLine();
@@ -399,17 +451,17 @@ local function render_ui()
 
         imgui.Spacing();
 
-        -- Tabs for Home Points and Survival Guides
+        -- Tabs for each travel system (only rendered if they contain locations)
         if imgui.BeginTabBar('##WarpTabs') then
-            if imgui.BeginTabItem('Home Points##Tab_HP') then
-                state.active_tab = 'hp';
-                render_locations_list(state.homepoints, state.near_hp, '/uw hp ');
-                imgui.EndTabItem();
-            end
-            if imgui.BeginTabItem('Survival Guides##Tab_SG') then
-                state.active_tab = 'sg';
-                render_locations_list(state.survivalguides, state.near_sg, '/uw sg ');
-                imgui.EndTabItem();
+            for _, key in ipairs(system_order) do
+                local sys = systems[key];
+                if #state.locations[key] > 0 then
+                    if imgui.BeginTabItem(sys.name .. '##Tab_' .. key) then
+                        state.active_tab = key;
+                        render_locations_list(state.locations[key], state.proximity[key].near, sys.command);
+                        imgui.EndTabItem();
+                    end
+                end
             end
             imgui.EndTabBar();
         end
@@ -425,8 +477,17 @@ end
 * desc : Event called when the addon is being loaded.
 --]]
 ashita.events.register('load', 'load_cb', function ()
-    load_homepoints();
-    load_survivalguides();
+    for _, key in ipairs(system_order) do
+        load_system_locations(key);
+    end
+
+    -- Default active tab to first successfully loaded system
+    for _, key in ipairs(system_order) do
+        if #state.locations[key] > 0 then
+            state.active_tab = key;
+            break;
+        end
+    end
 end);
 
 --[[
