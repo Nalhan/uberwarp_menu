@@ -21,6 +21,7 @@ local default_settings = T{
     auto_open  = false,
     auto_close = false,
     alpha      = 0.95,
+    scale      = 1.0,
 };
 
 -- Supported Uberwarp Systems Configuration
@@ -368,6 +369,7 @@ local function render_ui()
 
     imgui.SetNextWindowSize({ 380, 520 }, ImGuiCond_FirstUseEver);
     if imgui.Begin('Uberwarp Menu##UWM_Window', state.is_open, ImGuiWindowFlags_NoCollapse) then
+        imgui.SetWindowFontScale(state.settings.scale or 1.0);
         
         -- Proximity Status Bar based on Active Tab
         local active_sys = systems[state.active_tab];
@@ -443,6 +445,13 @@ local function render_ui()
             local alpha_tbl = { state.settings.alpha };
             if imgui.SliderFloat('##alphaSlider', alpha_tbl, 0.3, 1.0, '%.2f') then
                 state.settings.alpha = alpha_tbl[1];
+                settings.save();
+            end
+
+            imgui.Text('Menu Scale:');
+            local scale_tbl = { state.settings.scale or 1.0 };
+            if imgui.SliderFloat('##scaleSlider', scale_tbl, 0.5, 2.0, '%.2f') then
+                state.settings.scale = scale_tbl[1];
                 settings.save();
             end
             imgui.Unindent();
