@@ -24,8 +24,8 @@ local default_settings = T{
     auto_open_uncollected = true,
     alpha      = 0.95,
     scale      = 1.0,
-    collected  = {},
-    synced_systems = {},
+    collected  = T{},
+    synced_systems = T{},
     show_debug = false,
 };
 
@@ -106,6 +106,18 @@ local systems = {
 -- Deterministic tab render order
 local system_order = { 'hp', 'sg', 'wp', 'pw', 'uc', 'ep', 'ab', 'aw', 'rp', 'ev' };
 
+-- Helper to recursively promote standard tables to native Ashita T tables
+local function promote_to_t_tables(tbl)
+    if type(tbl) ~= 'table' then return tbl end
+    local t = (getmetatable(tbl) ~= nil) and tbl or T(tbl);
+    for k, v in pairs(t) do
+        if type(v) == 'table' then
+            t[k] = promote_to_t_tables(v);
+        end
+    end
+    return t;
+end
+
 -- State Variables
 local state = {
     is_open            = { false },
@@ -114,7 +126,7 @@ local state = {
     proximity          = {}, -- Map of key -> proximity state
     active_tab         = 'hp',
     npc_trigger_active = false, -- Remembers if auto-open has already triggered for this encounter
-    settings           = settings.load(default_settings),
+    settings           = promote_to_t_tables(settings.load(default_settings)),
     collected_dirty    = false,
 };
 
@@ -130,30 +142,30 @@ local check_system_map = {
     ['RunicPortal'] = 'rp'
 };
 
-local function sync_warp_nodes()
-    local check_commands = {
-        '/uw hp check',
-        '/uw sg check',
-        '/uw wp check',
-        '/uw uc check',
-        '/uw pw check',
-        '/uw ep check',
-        '/uw ab check',
-        '/uw rp check'
-    };
-    for _, cmd in ipairs(check_commands) do
-        AshitaCore:GetChatManager():QueueCommand(-1, cmd);
+local function can_sync_system(key)
+    for _, v in pairs(check_system_map) do
+        if v == key then
+            return true;
+        end
     end
-    print(chat.header(addon.name) .. chat.message("Syncing all collected nodes with Uberwarp in the background..."));
+    return false;
+end
+
+local function sync_active_system(key)
+    local sys = systems[key];
+    if sys and can_sync_system(key) then
+        AshitaCore:GetChatManager():QueueCommand(-1, sys.command .. 'CHECK');
+        print(chat.header(addon.name) .. chat.message(string.format("Syncing %s with Uberwarp...", sys.name)));
+    end
 end
 
 -- Ensure collected settings table is initialized
 if not state.settings.collected then
-    state.settings.collected = {};
+    state.settings.collected = T{};
 end
 
 if not state.settings.synced_systems then
-    state.settings.synced_systems = {};
+    state.settings.synced_systems = T{};
 end
 
 if state.settings.auto_open_uncollected == nil then
@@ -304,6 +316,23 @@ local function update_proximity()
                 print(chat.header(addon.name) .. chat.message(string.format("First encounter with %s NPC. Initializing obtained node list from Uberwarp...", sys.name)));
             end
         end
+    end
+
+    -- Auto-switch active system to the closest travel NPC that is near (< 6.0 yalms)
+    local closest_near_key = nil;
+    local closest_near_dist = 999.0;
+    for _, key in ipairs(system_order) do
+        local prox = state.proximity[key];
+        if #state.locations[key] > 0 and prox.near then
+            if prox.closest_dist < closest_near_dist then
+                closest_near_dist = prox.closest_dist;
+                closest_near_key = key;
+            end
+        end
+    end
+
+    if closest_near_key then
+        state.active_tab = closest_near_key;
     end
 
     -- Smart Proximity Latch: Auto-open / auto-close behavior based on proximity to any active system NPC
@@ -571,7 +600,7 @@ local function render_locations_list(system_key, locations_table, is_near_npc, c
                             if is_clickable then
                                 -- Auto-collect when successfully warped (redundant backup)
                                 if not state.settings.collected[system_key] then
-                                    state.settings.collected[system_key] = {};
+                                    state.settings.collected[system_key] = T{};
                                 end
                                 state.settings.collected[system_key][loc.alias] = true;
                                 state.collected_dirty = true;
@@ -681,7 +710,7 @@ local function render_ui()
                     local ukey = state.uncollected_near.key;
                     local ualias = state.uncollected_near.alias;
                     if not state.settings.collected[ukey] then
-                        state.settings.collected[ukey] = {};
+                        state.settings.collected[ukey] = T{};
                     end
                     state.settings.collected[ukey][ualias] = true;
                     settings.save();
@@ -692,6 +721,35 @@ local function render_ui()
             imgui.PopStyleColor(1);
             imgui.Spacing();
         end
+
+        -- System Selector Combo Box
+        local current_sys = systems[state.active_tab];
+        local current_sys_name = current_sys and current_sys.name or "Select System";
+        
+        imgui.TextColored({ 0.7, 0.8, 1.0, 1.0 }, 'Travel System:');
+        if imgui.BeginCombo('##SystemCombo', current_sys_name) then
+            for _, key in ipairs(system_order) do
+                local sys = systems[key];
+                if #state.locations[key] > 0 then
+                    local label = sys.name;
+                    if state.proximity[key].near then
+                        label = label .. ' [NEAR]';
+                    end
+                    local is_selected = (state.active_tab == key);
+                    if imgui.Selectable(label .. '##ComboItem_' .. key, is_selected) then
+                        state.active_tab = key;
+                    end
+                    if is_selected then
+                        imgui.SetItemDefaultFocus();
+                    end
+                end
+            end
+            imgui.EndCombo();
+        end
+
+        active_sys = systems[state.active_tab]; -- Update local active_sys reference immediately
+
+        imgui.Spacing();
 
         -- Search Box with Clear Button
         local active_sys_name = active_sys and active_sys.name or "Locations";
@@ -763,13 +821,24 @@ local function render_ui()
             
             imgui.Text(string.format('Collection Progress: %d / %d (%.1f%%)', collected_nodes, total_nodes, total_nodes > 0 and (collected_nodes / total_nodes * 100) or 0.0));
             
-            if imgui.Button('Sync with Uberwarp##SyncColl', { -1, 24 * scale }) then
-                sync_warp_nodes();
+            if can_sync_system(state.active_tab) then
+                local sys = systems[state.active_tab];
+                if imgui.Button(string.format('Sync %s with Uberwarp##SyncColl', sys.name), { -1, 24 * scale }) then
+                    sync_active_system(state.active_tab);
+                end
+            else
+                imgui.PushStyleColor(ImGuiCol_Button, { 0.15, 0.15, 0.15, 0.5 });
+                imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 0.15, 0.15, 0.15, 0.5 });
+                imgui.PushStyleColor(ImGuiCol_ButtonActive, { 0.15, 0.15, 0.15, 0.5 });
+                imgui.PushStyleColor(ImGuiCol_Text, { 0.45, 0.45, 0.45, 0.7 });
+                local sys = systems[state.active_tab];
+                imgui.Button(string.format('Sync %s Not Supported##SyncColl', sys and sys.name or 'System'), { -1, 24 * scale });
+                imgui.PopStyleColor(4);
             end
             
             if imgui.Button('Reset Collection Data##ResetColl', { -1, 24 * scale }) then
-                state.settings.collected = {};
-                state.settings.synced_systems = {};
+                state.settings.collected = T{};
+                state.settings.synced_systems = T{};
                 settings.save();
                 print(chat.header(addon.name) .. chat.message("Reset all warp collection data and sync history."));
             end
@@ -837,19 +906,11 @@ local function render_ui()
 
         imgui.Spacing();
 
-        -- Tabs for each travel system (only rendered if they contain locations)
-        if imgui.BeginTabBar('##WarpTabs') then
-            for _, key in ipairs(system_order) do
-                local sys = systems[key];
-                if #state.locations[key] > 0 then
-                    if imgui.BeginTabItem(sys.name .. '##Tab_' .. key) then
-                        state.active_tab = key;
-                        render_locations_list(key, state.locations[key], state.proximity[key].near, sys.command);
-                        imgui.EndTabItem();
-                    end
-                end
-            end
-            imgui.EndTabBar();
+        -- Locations list directly rendered
+        if active_sys and #state.locations[state.active_tab] > 0 then
+            render_locations_list(state.active_tab, state.locations[state.active_tab], state.proximity[state.active_tab].near, active_sys.command);
+        else
+            imgui.TextColored({ 0.5, 0.5, 0.5, 1.0 }, 'No active travel system selected.');
         end
 
     end
@@ -894,18 +955,34 @@ ashita.events.register('command', 'command_cb', function (e)
     end
 end);
 
--- Clean and strip colors/control codes from chat messages
-local function strip_color_codes(str)
-    if not str then return '' end
-    local cleaned = str:gsub('|c%x%x%x%x%x%x%x%x|', ''):gsub('|r|', '');
-    cleaned = cleaned:gsub('\x1e%x', ''):gsub('\x1f%x', ''):gsub('\x07', '');
-    return cleaned:trim();
+-- Clean and strip colors/control codes from chat messages using native Ashita methods
+local function clean_message(str)
+    if not str or str:len() == 0 then return '' end
+    str = str:strip_colors();
+    str = str:strip_translate(true);
+    return str:trim();
 end
 
 -- Intercept and parse Uberwarp check commands output
 ashita.events.register('text_in', 'uberwarp_menu_text_in_cb', function (e)
-    local cleaned = strip_color_codes(e.message);
+    local cleaned = clean_message(e.message);
     if cleaned == '' then return end
+
+    -- Auto-detect when interacting with a new node
+    if state.uncollected_near then
+        local lower_msg = cleaned:lower();
+        if lower_msg:find('able to teleport') or lower_msg:find('teleport to this') or lower_msg:find('attuned') or lower_msg:find('registered') or lower_msg:find('can now teleport') then
+            local ukey = state.uncollected_near.key;
+            local ualias = state.uncollected_near.alias;
+            if not state.settings.collected[ukey] then
+                state.settings.collected[ukey] = T{};
+            end
+            state.settings.collected[ukey][ualias] = true;
+            state.collected_dirty = true;
+            print(chat.header(addon.name) .. chat.message(string.format("Automatically detected and collected unlocked %s: %s!", state.uncollected_near.system_name, ualias)));
+            state.uncollected_near = nil;
+        end
+    end
     
     -- Match format: [Uberwarp:<SystemName>] <Alias> : <Status>
     local system_name, alias, status = cleaned:match('%[Uberwarp:([%a]+)%]%s*(.-)%s*:%s*(%a+)');
@@ -915,7 +992,7 @@ ashita.events.register('text_in', 'uberwarp_menu_text_in_cb', function (e)
             local is_unlocked = (status:lower() == 'unlocked');
             if is_unlocked then
                 if not state.settings.collected[key] then
-                    state.settings.collected[key] = {};
+                    state.settings.collected[key] = T{};
                 end
                 state.settings.collected[key][alias] = true;
                 state.collected_dirty = true;
