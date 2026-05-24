@@ -1017,7 +1017,7 @@ ashita.events.register('text_in', 'uberwarp_menu_text_in_cb', function (e)
     -- Auto-detect when interacting with a new node
     if state.uncollected_near then
         local lower_msg = cleaned:lower();
-        if lower_msg:find('able to teleport') or lower_msg:find('teleport to this') or lower_msg:find('attuned') or lower_msg:find('registered') or lower_msg:find('can now teleport') or lower_msg:find('shimmer and twist') or lower_msg:find('escha silt') or lower_msg:find('glimpse of what lies beyond') then
+        if lower_msg:find('able to teleport') or lower_msg:find('teleport to this') or lower_msg:find('attuned') or lower_msg:find('registered') or lower_msg:find('can now teleport') or lower_msg:find('shimmer and twist') or lower_msg:find('escha silt') or lower_msg:find('glimpse of what lies beyond') or lower_msg:find('waypoint to teleport') then
             local ukey = state.uncollected_near.key;
             local ualias = state.uncollected_near.alias;
             local uzone_name = state.uncollected_near.zone_name;
