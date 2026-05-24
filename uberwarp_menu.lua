@@ -159,7 +159,24 @@ local function sync_active_system(key)
     end
 end
 
--- Ensure collected settings table is initialized
+-- Register for settings changes to handle character switching and ensure settings persist
+settings.register('settings', 'settings_update', function (new_settings)
+    state.settings = promote_to_t_tables(new_settings);
+    
+    if not state.settings.collected then
+        state.settings.collected = T{};
+    end
+
+    if not state.settings.synced_systems then
+        state.settings.synced_systems = T{};
+    end
+
+    if state.settings.auto_open_uncollected == nil then
+        state.settings.auto_open_uncollected = true;
+    end
+end);
+
+-- Initial initialization of loaded settings fields
 if not state.settings.collected then
     state.settings.collected = T{};
 end
@@ -234,6 +251,15 @@ local function load_system_locations(key)
     end
 end
 
+-- Helper to check if an entity is currently active and rendered/visible to the client
+local function is_entity_rendered(ent)
+    if not ent or not ent.Render or not ent.Render.Flags0 then
+        return false;
+    end
+    local flags = ent.Render.Flags0;
+    return bit.band(flags, 0x200) == 0x200 and bit.band(flags, 0x4000) == 0;
+end
+
 --[[
 * Scans all active entities to detect proximity to configured NPC types
 --]]
@@ -261,7 +287,7 @@ local function update_proximity()
 
     for i = 0, 2304 do
         local ent = GetEntity(i);
-        if ent and ent.Name then
+        if ent and ent.Name and is_entity_rendered(ent) then
             local is_pc = (ent.SpawnFlags and bit.band(ent.SpawnFlags, 0x0001) ~= 0);
             if not is_pc then
                 local name = ent.Name:trimend('\x00');
@@ -387,22 +413,27 @@ local function update_proximity()
                             -- This prevents false alerts for non-existent crystals (e.g. Upper Jeuno HP #4 on HorizonXI).
                             local npc_near = (state.proximity[key].closest_dist < 8.0);
                             if npc_near then
-                                local is_collected = false;
-                                if state.settings.collected[key] and state.settings.collected[key][loc.alias] then
-                                    is_collected = true;
-                                end
-                                
-                                if not is_collected then
-                                    if dist < closest_uncollected_dist then
-                                        closest_uncollected_dist = dist;
-                                        closest_uncollected_node = {
-                                            key = key,
-                                            alias = loc.alias,
-                                            dist = dist,
-                                            system_name = sys.name
-                                        };
-                                    end
-                                end
+                                 local is_collected = false;
+                                 local collect_key = loc.alias;
+                                 if key == 'ep' or key == 'ab' then
+                                     collect_key = string.format('(%s)%s', loc.zone_name, loc.alias);
+                                 end
+                                 if state.settings.collected[key] and state.settings.collected[key][collect_key] then
+                                     is_collected = true;
+                                 end
+                                 
+                                 if not is_collected then
+                                     if dist < closest_uncollected_dist then
+                                         closest_uncollected_dist = dist;
+                                         closest_uncollected_node = {
+                                             key = key,
+                                             alias = loc.alias,
+                                             zone_name = loc.zone_name,
+                                             dist = dist,
+                                             system_name = sys.name
+                                         };
+                                     end
+                                 end
                             end
                         end
                     end
@@ -582,7 +613,11 @@ local function render_locations_list(system_key, locations_table, is_near_npc, c
                     for _, loc in ipairs(grouped[zone_name]) do
                         -- Prepend checkmark depending on collected status
                         local is_collected = false;
-                        if state.settings.collected[system_key] and state.settings.collected[system_key][loc.alias] then
+                        local collect_key = loc.alias;
+                        if system_key == 'ep' or system_key == 'ab' then
+                            collect_key = string.format('(%s)%s', loc.zone_name, loc.alias);
+                        end
+                        if state.settings.collected[system_key] and state.settings.collected[system_key][collect_key] then
                             is_collected = true;
                         end
 
@@ -602,7 +637,7 @@ local function render_locations_list(system_key, locations_table, is_near_npc, c
                                 if not state.settings.collected[system_key] then
                                     state.settings.collected[system_key] = T{};
                                 end
-                                state.settings.collected[system_key][loc.alias] = true;
+                                state.settings.collected[system_key][collect_key] = true;
                                 state.collected_dirty = true;
                                 
                                 AshitaCore:GetChatManager():QueueCommand(-1, command_prefix .. loc.alias);
@@ -709,10 +744,15 @@ local function render_ui()
                 if imgui.Button('Collect##AlertBtn', { btn_width, 24 * scale }) then
                     local ukey = state.uncollected_near.key;
                     local ualias = state.uncollected_near.alias;
+                    local uzone_name = state.uncollected_near.zone_name;
+                    local ucollect_key = ualias;
+                    if ukey == 'ep' or ukey == 'ab' then
+                        ucollect_key = string.format('(%s)%s', uzone_name, ualias);
+                    end
                     if not state.settings.collected[ukey] then
                         state.settings.collected[ukey] = T{};
                     end
-                    state.settings.collected[ukey][ualias] = true;
+                    state.settings.collected[ukey][ucollect_key] = true;
                     settings.save();
                     print(chat.header(addon.name) .. chat.message(string.format("Marked %s: %s as collected!", state.uncollected_near.system_name, ualias)));
                 end
@@ -950,6 +990,12 @@ ashita.events.register('command', 'command_cb', function (e)
     local command = string.lower(args[1]);
     if (command == '/uwm') or (command == '/uwmenu') then
         e.blocked = true;
+        if #args > 1 and string.lower(args[2]) == 'status' then
+            print(chat.header(addon.name) .. chat.message(string.format("Window Open: %s, auto_open: %s, auto_close: %s, proximity.ep.near: %s, closest_dist: %.2f (%s)", 
+                tostring(state.is_open[1]), tostring(state.settings.auto_open), tostring(state.settings.auto_close), 
+                tostring(state.proximity['ep'].near), state.proximity['ep'].closest_dist, state.proximity['ep'].closest_name)));
+            return;
+        end
         state.is_open[1] = not state.is_open[1];
         return;
     end
@@ -974,10 +1020,15 @@ ashita.events.register('text_in', 'uberwarp_menu_text_in_cb', function (e)
         if lower_msg:find('able to teleport') or lower_msg:find('teleport to this') or lower_msg:find('attuned') or lower_msg:find('registered') or lower_msg:find('can now teleport') then
             local ukey = state.uncollected_near.key;
             local ualias = state.uncollected_near.alias;
+            local uzone_name = state.uncollected_near.zone_name;
+            local ucollect_key = ualias;
+            if ukey == 'ep' or ukey == 'ab' then
+                ucollect_key = string.format('(%s)%s', uzone_name, ualias);
+            end
             if not state.settings.collected[ukey] then
                 state.settings.collected[ukey] = T{};
             end
-            state.settings.collected[ukey][ualias] = true;
+            state.settings.collected[ukey][ucollect_key] = true;
             state.collected_dirty = true;
             print(chat.header(addon.name) .. chat.message(string.format("Automatically detected and collected unlocked %s: %s!", state.uncollected_near.system_name, ualias)));
             state.uncollected_near = nil;
